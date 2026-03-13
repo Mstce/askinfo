@@ -158,4 +158,3 @@ python agent.py "帮我梳理示例科技有限公司的互联网资产"
 ## Notes
 
 - 项目发布名是 `askinfo`，当前 Python 包导入名仍为 `asset_mapping_agent`。
-- 仓库中的公司名、地域和域名示例均为通用占位信息，不代表真实客户数据。
