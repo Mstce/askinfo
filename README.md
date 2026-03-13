@@ -138,8 +138,3 @@ python agent.py "帮我梳理示例科技有限公司的互联网资产"
 - `prompts/intent_and_plan.md`: Agent 规划提示词
 - `.env.example`: 环境变量模板
 
-## Notes
-
-- 项目发布名是 `askinfo`，当前 Python 包导入名仍为 `asset_mapping_agent`。
-- 仓库中的公司名、地域和域名示例均为通用占位信息，不代表真实客户数据。
-- 请不要把你的真实 `.env` 提交到仓库；版本控制中只保留 `.env.example`。
