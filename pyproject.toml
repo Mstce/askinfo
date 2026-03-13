@@ -1,0 +1,22 @@
+﻿[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "askinfo"
+version = "0.1.0"
+description = "Terminal-first asset discovery orchestrator with multi-platform query compilation and report export"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "openpyxl>=3.1",
+]
+
+[project.scripts]
+askinfo = "asset_mapping_agent.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
