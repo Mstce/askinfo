@@ -13,6 +13,7 @@ from asset_mapping_agent.reporting import AssetWorkbookExportResult
 class AgentStage(str, Enum):
     PLANNING_STARTED = "planning_started"
     PLANNING_COMPLETED = "planning_completed"
+    QUERY_STRATEGY_ADJUSTED = "query_strategy_adjusted"
     PLATFORM_RETRY = "platform_retry"
     PLATFORM_DEGRADED = "platform_degraded"
     PRIMARY_QUERY_STARTED = "primary_query_started"

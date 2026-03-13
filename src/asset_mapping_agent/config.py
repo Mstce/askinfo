@@ -23,6 +23,42 @@ class RuntimeSettings:
     http_proxy: str = ""
     https_proxy: str = ""
 
+    @staticmethod
+    def default_env_candidates() -> list[Path]:
+        candidates: list[Path] = [Path(".env")]
+
+        askinfo_env = os.getenv("ASKINFO_ENV_FILE", "").strip()
+        if askinfo_env:
+            candidates.append(Path(askinfo_env))
+
+        appdata = os.getenv("APPDATA", "").strip()
+        if appdata:
+            candidates.append(Path(appdata) / "askinfo" / ".env")
+
+        candidates.append(Path.home() / ".askinfo" / ".env")
+
+        unique_candidates: list[Path] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            normalized = str(candidate.expanduser().resolve(strict=False))
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            unique_candidates.append(candidate)
+        return unique_candidates
+
+    @classmethod
+    def resolve_env_file(cls, path: str | Path | None = None) -> Path | None:
+        if path is not None:
+            file_path = Path(path).expanduser()
+            return file_path if file_path.exists() else None
+
+        for candidate in cls.default_env_candidates():
+            file_path = candidate.expanduser()
+            if file_path.exists():
+                return file_path
+        return None
+
     @classmethod
     def from_env(cls) -> "RuntimeSettings":
         return cls(
@@ -44,9 +80,9 @@ class RuntimeSettings:
         )
 
     @classmethod
-    def from_env_file(cls, path: str | Path = ".env") -> "RuntimeSettings":
-        file_path = Path(path)
-        if not file_path.exists():
+    def from_env_file(cls, path: str | Path | None = None) -> "RuntimeSettings":
+        file_path = cls.resolve_env_file(path)
+        if file_path is None:
             return cls.from_env()
 
         parsed = dict(os.environ)

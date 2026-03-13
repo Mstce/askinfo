@@ -127,6 +127,15 @@ class TerminalAgentOrchestrator:
                     platform: len(execution.search_result.records)
                     for platform, execution in primary_batch.executions.items()
                 }
+                active_plan, normalized_assets, platform_records = self._retry_primary_query_with_ai_replan(
+                    active_plan,
+                    normalized_assets,
+                    platform_records,
+                    budget=budget,
+                    events_log=log,
+                    http_clients=http_clients,
+                    platform_options=platform_options,
+                )
             else:
                 log(
                     AgentStage.BUDGET_LIMIT_REACHED,
@@ -423,6 +432,65 @@ class TerminalAgentOrchestrator:
                 max_platform_calls=budget.max_platform_calls,
             )
         return selected
+
+    def _retry_primary_query_with_ai_replan(
+        self,
+        plan: AgentPlan,
+        normalized_assets: list[NormalizedAssetRecord],
+        platform_records: dict[str, int],
+        *,
+        budget: PlatformBudgetState,
+        events_log: Callable[..., None],
+        http_clients: dict[str, object] | None,
+        platform_options: dict[str, dict[str, object]] | None,
+    ) -> tuple[AgentPlan, list[NormalizedAssetRecord], dict[str, int]]:
+        if normalized_assets:
+            return plan, normalized_assets, platform_records
+        if not plan.primary_platforms:
+            return plan, normalized_assets, platform_records
+        if budget.remaining_platform_calls <= 0:
+            return plan, normalized_assets, platform_records
+
+        replanned = self.planner.replan_for_zero_results(plan.source_text, plan, platform_records)
+        if replanned is None:
+            return plan, normalized_assets, platform_records
+
+        retry_platforms = self._select_primary_platforms(replanned, budget, events_log=events_log)
+        if not retry_platforms:
+            return plan, normalized_assets, platform_records
+
+        events_log(
+            AgentStage.QUERY_STRATEGY_ADJUSTED,
+            "AI revised the primary query strategy after zero results",
+            reason="zero_results",
+            previous_subject_name=plan.subject_name,
+            previous_province=plan.province,
+            previous_focus=list(plan.focus),
+            new_subject_name=replanned.subject_name,
+            new_province=replanned.province,
+            new_focus=list(replanned.focus),
+            previous_platform_records=platform_records,
+        )
+        events_log(
+            AgentStage.PRIMARY_QUERY_STARTED,
+            "Retry primary asset query with AI-adjusted strategy",
+            platforms=retry_platforms,
+            remaining_platform_calls=budget.remaining_platform_calls,
+        )
+        retry_batch = self.query_execution_service.execute_intent(
+            replanned.primary_intent,
+            retry_platforms,
+            http_clients=http_clients,
+            platform_options=platform_options,
+        )
+        budget.platform_calls_used += len(retry_batch.executions)
+        retry_assets = list(self.workflow_service.normalizer.normalize_batch(retry_batch))
+        self._log_batch_execution_events(retry_batch, events_log=events_log, phase="primary_query_replanned")
+        retry_records = {
+            platform: len(execution.search_result.records)
+            for platform, execution in retry_batch.executions.items()
+        }
+        return replanned, retry_assets, retry_records
 
     def _log_batch_execution_events(
         self,

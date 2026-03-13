@@ -169,6 +169,21 @@ def format_event_lines(event: AgentLogEvent) -> list[str]:
             lines.append(f"{indent}预算: {budget_text}")
         return lines
 
+    if event.stage.value == "query_strategy_adjusted":
+        lines.append(f"{prefix} 已自动调整查询策略：首轮结果为 0，正在放宽条件重试")
+        previous_focus = _format_focus_list(details.get("previous_focus"))
+        new_focus = _format_focus_list(details.get("new_focus"))
+        if details.get("previous_province") != details.get("new_province"):
+            lines.append(
+                f"{indent}地域: {details.get('previous_province') or '无'} -> {details.get('new_province') or '无'}"
+            )
+        if previous_focus != new_focus:
+            lines.append(f"{indent}重点: {previous_focus or '无'} -> {new_focus or '无'}")
+        records = details.get("previous_platform_records")
+        if isinstance(records, dict) and records:
+            lines.append(f"{indent}首轮平台结果: {_format_platform_records(records)}")
+        return lines
+
     if event.stage.value == "primary_query_started":
         platforms = _format_platform_list(details.get("platforms")) or "未指定"
         remaining = details.get("remaining_platform_calls", "-")
@@ -293,6 +308,20 @@ def _format_platform_records(records: object) -> str:
     for platform, count in records.items():
         parts.append(f"{_format_platform_name(platform)} {count} 条")
     return "，".join(parts)
+
+
+def _format_focus_list(values: object) -> str:
+    if not isinstance(values, list):
+        return ""
+    mapping = {
+        "login_page": "登录页",
+        "admin_panel": "后台",
+        "middleware_console": "中间件控制台",
+        "test_environment": "测试环境",
+        "portal": "门户",
+    }
+    rendered = [mapping.get(str(value), str(value)) for value in values if str(value or "").strip()]
+    return " / ".join(rendered)
 
 
 def _format_domain_list(domains: object) -> str:
@@ -516,12 +545,13 @@ def export_special_output(plan: AgentPlan, result, output_path: Path) -> Path:  
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the terminal AI agent.")
     parser.add_argument("text", nargs="?", help="Natural language task text.")
-    parser.add_argument("--env-file", default=".env", help="Path to local env file.")
+    parser.add_argument(
+        "--env-file",
+        help="Optional env file path. Defaults to .env, %APPDATA%\\askinfo\\.env, or ~/.askinfo/.env.",
+    )
     parser.add_argument("--output", help="Output report path.")
     parser.add_argument("--doctor", action="store_true", help="Check runtime prerequisites and exit.")
     args = parser.parse_args()
-    args.plan_only = False
-    args.plan_file = None
 
     settings = RuntimeSettings.from_env_file(args.env_file)
     if args.doctor:
@@ -538,46 +568,35 @@ def main() -> int:
             timeout=settings.openai_timeout,
             progress_logger=print_status,
         )
-    if not llm_client and not args.plan_file:
+    if not llm_client:
         raise SystemExit("OPENAI_API_KEY is required for terminal AI agent.")
 
-    planner = TerminalAgentPlanner(
-        llm_client or OpenAICompatibleLlmClient(api_key="offline", model="offline"),
-    )
-    if args.plan_file:
-        print_status(f"读取计划文件：{args.plan_file}")
-        plan = load_plan_from_file(args.plan_file, planner, fallback_text=args.text or "")
-        print_status(f"计划文件已加载：目标 {plan.subject_name or '未识别'}")
-    else:
-        print_status("开始规划：正在用 AI 解析任务意图")
-        print_status(f"任务原文：{args.text}")
-        print_status("AI 输出要求：主体识别、平台选择、补查策略、预算控制")
-        print_status(f"AI 模型：{settings.openai_model}")
-        print_status(f"AI 网关：{settings.openai_base_url}")
-        plan = planner.plan(args.text)
-        print_status("AI 原始规划返回如下：")
-        print(json.dumps(plan.raw_plan, ensure_ascii=False, indent=2), flush=True)
-        planning_event = AgentLogEvent(
-            stage=AgentStage.PLANNING_COMPLETED,
-            message="Planning completed",
-            timestamp=datetime.now().astimezone().isoformat(),
-            details={
-                "subject_name": plan.subject_name,
-                "primary_platforms": plan.primary_platforms,
-                "enrichment_platforms": plan.enrichment_platforms,
-                "budget": {
-                    "max_primary_platforms": plan.max_primary_platforms,
-                    "max_enrichment_rounds": plan.max_enrichment_rounds,
-                    "max_enrichment_domains_total": plan.max_enrichment_domains_total,
-                    "max_platform_calls": plan.max_platform_calls,
-                },
+    planner = TerminalAgentPlanner(llm_client)
+    print_status("开始规划：正在用 AI 解析任务意图")
+    print_status(f"任务原文：{args.text}")
+    print_status("AI 输出要求：主体识别、平台选择、补查策略、预算控制")
+    print_status(f"AI 模型：{settings.openai_model}")
+    print_status(f"AI 网关：{settings.openai_base_url}")
+    plan = planner.plan(args.text)
+    print_status("AI 原始规划返回如下：")
+    print(json.dumps(plan.raw_plan, ensure_ascii=False, indent=2), flush=True)
+    planning_event = AgentLogEvent(
+        stage=AgentStage.PLANNING_COMPLETED,
+        message="Planning completed",
+        timestamp=datetime.now().astimezone().isoformat(),
+        details={
+            "subject_name": plan.subject_name,
+            "primary_platforms": plan.primary_platforms,
+            "enrichment_platforms": plan.enrichment_platforms,
+            "budget": {
+                "max_primary_platforms": plan.max_primary_platforms,
+                "max_enrichment_rounds": plan.max_enrichment_rounds,
+                "max_enrichment_domains_total": plan.max_enrichment_domains_total,
+                "max_platform_calls": plan.max_platform_calls,
             },
-        )
-        print_event(planning_event)
-
-    if args.plan_only:
-        print(json.dumps(serialize_plan(plan), ensure_ascii=False, indent=2))
-        return 0
+        },
+    )
+    print_event(planning_event)
 
     registry = build_adapter_registry(settings)
     query_execution_service = QueryExecutionService(CompilerRegistry.default(), registry)

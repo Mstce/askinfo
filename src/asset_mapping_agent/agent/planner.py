@@ -109,6 +109,28 @@ class TerminalAgentPlanner:
         )
         return self.plan_from_payload(payload, source_text=source_text)
 
+    def replan_for_zero_results(self, text: str, previous_plan: AgentPlan, platform_records: dict[str, int]) -> AgentPlan | None:
+        source_text = text.strip()
+        prompt = self._load_prompt()
+        payload = self.llm_client.complete_json(
+            [
+                LlmMessage(role="system", content=prompt),
+                LlmMessage(
+                    role="user",
+                    content=self._build_zero_result_replan_prompt(
+                        source_text=source_text,
+                        previous_plan=previous_plan,
+                        platform_records=platform_records,
+                    ),
+                ),
+            ],
+            response_schema=PLAN_SCHEMA,
+        )
+        replanned = self.plan_from_payload(payload, source_text=source_text)
+        if self._plan_signature(replanned) == self._plan_signature(previous_plan):
+            return None
+        return replanned
+
     def plan_from_payload(self, payload: dict[str, Any], *, source_text: str) -> AgentPlan:
         source_text = source_text.strip()
         notes = self._normalize_notes(payload.get("notes"))
@@ -206,10 +228,69 @@ class TerminalAgentPlanner:
             'special_output_format must be "".'
         )
 
+    def _build_zero_result_replan_prompt(
+        self,
+        *,
+        source_text: str,
+        previous_plan: AgentPlan,
+        platform_records: dict[str, int],
+    ) -> str:
+        return (
+            "The previous search strategy returned zero results across all primary platforms.\n"
+            "Revise the plan to broaden recall while keeping the user's intent.\n"
+            "Prefer these adjustments when appropriate:\n"
+            "1. Relax title/focus constraints before changing the target subject.\n"
+            "2. Remove or broaden province constraints if they may be over-restrictive.\n"
+            "3. Keep the same output format and budget unless there is a clear reason to change.\n"
+            "4. Do not invent domains unless strongly implied.\n\n"
+            f"Original task text:\n{source_text}\n\n"
+            "Previous normalized plan:\n"
+            f"{self._serialize_plan_snapshot(previous_plan)}\n\n"
+            f"Platform record counts: {platform_records}\n\n"
+            "Return only a revised JSON object."
+        )
+
     def _load_prompt(self) -> str:
         if self.prompt_path.exists():
             return self.prompt_path.read_text(encoding="utf-8")
         return "You are an asset mapping planning assistant. Return valid JSON only."
+
+    def _serialize_plan_snapshot(self, plan: AgentPlan) -> str:
+        snapshot = {
+            "subject_name": plan.subject_name,
+            "known_domains": list(plan.known_domains),
+            "province": plan.province,
+            "platforms": list(plan.primary_platforms),
+            "domain_enrichment_platforms": list(plan.enrichment_platforms),
+            "focus": list(plan.focus),
+            "follow_domain_enrichment": plan.follow_domain_enrichment,
+            "verify_http": plan.verify_http,
+            "verify_tcp": plan.verify_tcp,
+            "max_results_per_platform": plan.max_results_per_platform,
+            "max_primary_platforms": plan.max_primary_platforms,
+            "max_enrichment_rounds": plan.max_enrichment_rounds,
+            "max_enrichment_domains_total": plan.max_enrichment_domains_total,
+            "max_platform_calls": plan.max_platform_calls,
+            "special_output_format": plan.special_output_format,
+            "notes": list(plan.notes),
+        }
+        return str(snapshot)
+
+    def _plan_signature(self, plan: AgentPlan) -> tuple[object, ...]:
+        return (
+            plan.subject_name,
+            tuple(plan.known_domains),
+            plan.province,
+            tuple(plan.focus),
+            tuple(plan.primary_platforms),
+            tuple(plan.enrichment_platforms),
+            plan.max_results_per_platform,
+            plan.max_primary_platforms,
+            plan.max_enrichment_rounds,
+            plan.max_enrichment_domains_total,
+            plan.max_platform_calls,
+            plan.special_output_format,
+        )
 
     def _build_primary_intent(
         self,
